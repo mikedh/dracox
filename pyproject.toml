@@ -9,6 +9,9 @@ version = "0.0.1"
 authors = [{name = "Michael Dawson-Haggerty", email = "mikedh@kerfed.com"}]
 dependencies = ["numpy"]
 
+[project.optional-dependencies]
+test = ["pytest", "msgpack"]
+
 [tool.scikit-build]
 minimum-version = "0.5"
 build-dir = "build/{wheel_tag}"
@@ -22,3 +25,8 @@ DRACO_MESH_COMPRESSION = "ON"
 DRACO_STANDARD_EDGEBREAKER = "ON"
 DRACO_PREDICTIVE_EDGEBREAKER = "ON"
 DRACO_BACKWARDS_COMPATIBILITY = "ON"
+
+[tool.cibuildwheel]
+# Run the package tests using `pytest`
+test-command = "pytest {project}/tests"
+test-extras = ["test"]
