@@ -35,7 +35,9 @@ def handle_draco_primitive(
       True if Draco decompression was successful, False otherwise
     """
     # get the draco-compressed data if it exists
-    draco_field = primitive.get("extensions", {}).get("KHR_draco_mesh_compression", None)
+    draco_field = primitive.get("extensions", {}).get(
+        "KHR_draco_mesh_compression", None
+    )
 
     if draco_field is None:
         return False
@@ -58,25 +60,17 @@ def handle_draco_primitive(
     # Update the access array with decompressed data
     # The extension spec says accessors must match decompressed data
     for attr_name in draco_field["attributes"].keys():
-        if attr_name in decompressed:
-            # Find the accessor index for this attribute
-            if attr_name in primitive["attributes"]:
-                accessor_idx = primitive["attributes"][attr_name]
-                # Replace the accessor data with decompressed data
-                data = decompressed[attr_name]
-                print(
-                    f"[dracox] Setting accessor[{accessor_idx}] ({attr_name}): dtype={data.dtype}, shape={data.shape}, min={data.min(axis=0) if len(data.shape) > 1 else data.min()}, max={data.max(axis=0) if len(data.shape) > 1 else data.max()}"
-                )
-                access[accessor_idx] = data
+        if attr_name not in decompressed:
+            continue
+
+        # append the decompressed data as a new accessor
+        primitive["attributes"][attr_name] = len(access)
+        access.append(decompressed[attr_name])
 
     # Handle indices if present in Draco extension
     if "indices" in primitive and "indices" in decompressed:
-        indices_accessor_idx = primitive["indices"]
-        data = decompressed["indices"]
-        print(
-            f"[dracox] Setting accessor[{indices_accessor_idx}] (indices): dtype={data.dtype}, shape={data.shape}"
-        )
-        access[indices_accessor_idx] = data
+        primitive["indices"] = len(access)
+        access.append(decompressed["indices"])
 
     return True
 
