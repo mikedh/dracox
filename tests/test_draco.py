@@ -3,6 +3,7 @@ Unit tests for dracox Draco mesh decompression.
 """
 
 import os
+
 import msgpack
 import numpy as np
 
