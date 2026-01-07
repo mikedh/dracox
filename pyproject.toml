@@ -27,7 +27,7 @@ DRACO_PREDICTIVE_EDGEBREAKER = "ON"
 DRACO_BACKWARDS_COMPATIBILITY = "ON"
 
 [tool.cibuildwheel]
-skip = ["*-musllinux*"]
+skip = ["*-musllinux*", "*-win32"]
 # Clean build artifacts that can cause auditwheel to fail with "too-recent versioned symbols"
 # Uses Python for cross-platform compatibility (rm/find don't exist on Windows)
 before-build = "python -c \"import shutil, glob, os; shutil.rmtree('{project}/build', ignore_errors=True); [os.remove(f) for f in glob.glob('{project}/**/*.so', recursive=True) + glob.glob('{project}/**/*.pyd', recursive=True)]\""
