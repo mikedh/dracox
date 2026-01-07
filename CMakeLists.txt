@@ -22,13 +22,17 @@ list(APPEND CMAKE_PREFIX_PATH "${NB_DIR}")
 find_package(nanobind CONFIG REQUIRED)
 
 # Add Draco as a subdirectory
-# We'll configure it to build only what we need
+# Configure Draco for both encoding and decoding
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(DRACO_POINT_CLOUD_COMPRESSION ON CACHE BOOL "" FORCE)
 set(DRACO_MESH_COMPRESSION ON CACHE BOOL "" FORCE)
 set(DRACO_STANDARD_EDGEBREAKER ON CACHE BOOL "" FORCE)
 set(DRACO_PREDICTIVE_EDGEBREAKER ON CACHE BOOL "" FORCE)
 set(DRACO_BACKWARDS_COMPATIBILITY ON CACHE BOOL "" FORCE)
+
+# Enable both encoder and decoder
+set(DRACO_ENCODER ON CACHE BOOL "" FORCE)
+set(DRACO_DECODER ON CACHE BOOL "" FORCE)
 
 # Disable unnecessary Draco features to minimize build
 set(DRACO_TESTS OFF CACHE BOOL "" FORCE)
@@ -37,8 +41,6 @@ set(DRACO_UNITY_PLUGIN OFF CACHE BOOL "" FORCE)
 set(DRACO_MAYA_PLUGIN OFF CACHE BOOL "" FORCE)
 set(DRACO_ANIMATION_ENCODING OFF CACHE BOOL "" FORCE)
 set(DRACO_TRANSCODER_SUPPORTED OFF CACHE BOOL "" FORCE)
-
-# Only build decoder tools and library, not encoder
 set(DRACO_JS_GLUE OFF CACHE BOOL "" FORCE)
 
 add_subdirectory(draco)

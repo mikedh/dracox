@@ -1,0 +1,99 @@
+name: Build Wheels
+
+on: [push, pull_request]
+
+jobs:
+  wheels:
+    name: Build wheel on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15-intel, macos-latest]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      name: Install Python
+      with:
+        python-version: '3.x'
+    - name: Install cibuildwheel
+      run: |
+        python -m pip install cibuildwheel==3.3.0
+    - name: Build wheel
+      run: |
+        python -m cibuildwheel --output-dir dist
+    - uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.os }}
+        path: dist/
+
+  sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Build sdist
+        run: pip install build && python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  release:
+    permissions:
+      contents: write  # for actions/create-release
+    name: Create GitHub Release
+    needs: [wheels, sdist, pypi]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Tag Version
+        id: set_tag
+        run: |
+          export V=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "tag=${V}" >> "$GITHUB_ENV"
+      - name: Download Wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          tag: ${{ env.tag }}
+          artifacts: "dist/*"
+  pypi:
+    name: Release to PyPI
+    needs: [wheels, sdist]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Download Wheels
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheels-*
+          merge-multiple: true
+      - name: Download sdist
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.13.0
+        with:
+          packages-dir: dist

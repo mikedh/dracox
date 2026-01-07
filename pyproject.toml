@@ -27,6 +27,6 @@ DRACO_PREDICTIVE_EDGEBREAKER = "ON"
 DRACO_BACKWARDS_COMPATIBILITY = "ON"
 
 [tool.cibuildwheel]
-# Run the package tests using `pytest`
+skip = ["pp*", "*-musllinux*"]
 test-command = "pytest {project}/tests"
 test-extras = ["test"]
