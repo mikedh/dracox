@@ -10,7 +10,7 @@ authors = [{name = "Michael Dawson-Haggerty", email = "mikedh@kerfed.com"}]
 dependencies = ["numpy"]
 
 [project.optional-dependencies]
-test = ["pytest", "msgpack"]
+test = ["pytest", "msgpack", "trimesh", "lxml", "networkx", "scipy"]
 
 [tool.scikit-build]
 minimum-version = "0.5"
@@ -28,5 +28,11 @@ DRACO_BACKWARDS_COMPATIBILITY = "ON"
 
 [tool.cibuildwheel]
 skip = ["*-musllinux*"]
+# Clean build artifacts that can cause auditwheel to fail with "too-recent versioned symbols"
+# Uses Python for cross-platform compatibility (rm/find don't exist on Windows)
+before-build = "python -c \"import shutil, glob, os; shutil.rmtree('{project}/build', ignore_errors=True); [os.remove(f) for f in glob.glob('{project}/**/*.so', recursive=True) + glob.glob('{project}/**/*.pyd', recursive=True)]\""
 test-command = "pytest {project}/tests"
 test-extras = ["test"]
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "10.14" }

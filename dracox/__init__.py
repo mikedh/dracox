@@ -100,6 +100,7 @@ def _draco_encode(ctx: "PrimitiveExportContext") -> Optional[Dict[str, Any]]:
     mesh = ctx["mesh"]
     buffer_items = ctx["buffer_items"]
     primitive = ctx["primitive"]
+    tree = ctx["tree"]
     include_normals = ctx["include_normals"]
 
     # Get mesh data
@@ -129,6 +130,33 @@ def _draco_encode(ctx: "PrimitiveExportContext") -> Optional[Dict[str, Any]]:
     padding = (4 - len(compressed) % 4) % 4
     if padding > 0:
         compressed = compressed + b'\x00' * padding
+
+    # Replace uncompressed buffers with empty stubs
+    # Per glTF spec, accessor data MAY be empty when draco extension is present
+    accessors = tree["accessors"]
+    buffer_keys = list(buffer_items.keys())
+
+    # Find accessor indices that belong to this primitive
+    accessor_indices = []
+    if "indices" in primitive:
+        accessor_indices.append(primitive["indices"])
+    for attr_idx in primitive.get("attributes", {}).values():
+        accessor_indices.append(attr_idx)
+
+    # Replace buffers for these accessors with minimal 4-byte stubs
+    # The accessor's bufferView field tells us which buffer to stub
+    accessor_list = list(accessors.values()) if hasattr(accessors, 'values') else accessors
+    for acc_idx in accessor_indices:
+        if acc_idx < len(accessor_list):
+            accessor = accessor_list[acc_idx]
+            # Get the bufferView index from the accessor
+            bv_idx = accessor.get("bufferView")
+            if bv_idx is not None and bv_idx < len(buffer_keys):
+                key = buffer_keys[bv_idx]
+                # Replace with 4-byte stub (minimum for alignment)
+                buffer_items[key] = b'\x00\x00\x00\x00'
+            # Update accessor count to 0 since data is in draco buffer
+            accessor["count"] = 0
 
     # Add compressed buffer to buffer_items
     # The bufferView index will be the position in the OrderedDict
@@ -179,4 +207,46 @@ def _register_handlers():
 # Register on import
 _register_handlers()
 
-__all__ = ["_draco_decode", "_draco_encode"]
+def handle_draco_primitive(primitive, views, access):
+    """
+    Handle KHR_draco_mesh_compression for a glTF primitive.
+
+    Parameters
+    ----------
+    primitive : dict
+        The primitive dict with extensions data
+    views : list
+        List of buffer views (bytes)
+    access : list
+        List of accessors (will be modified in-place)
+
+    Returns
+    -------
+    bool
+        True if successful, False otherwise
+    """
+    from .dracox_ext import decode_draco_buffer
+
+    ext_data = primitive.get("extensions", {}).get("KHR_draco_mesh_compression")
+    if ext_data is None:
+        return False
+
+    buffer_view_index = ext_data["bufferView"]
+    compressed_data = views[buffer_view_index]
+    attribute_map = [(name, id) for name, id in ext_data["attributes"].items()]
+
+    decompressed = decode_draco_buffer(compressed_data, attribute_map)
+
+    for attr_name in ext_data["attributes"].keys():
+        if attr_name in decompressed:
+            primitive["attributes"][attr_name] = len(access)
+            access.append(decompressed[attr_name])
+
+    if "indices" in primitive and "indices" in decompressed:
+        primitive["indices"] = len(access)
+        access.append(decompressed["indices"])
+
+    return True
+
+
+__all__ = ["_draco_decode", "_draco_encode", "handle_draco_primitive"]
