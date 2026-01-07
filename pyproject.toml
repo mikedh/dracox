@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "dracox"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 version = "0.0.1"
 authors = [{name = "Michael Dawson-Haggerty", email = "mikedh@kerfed.com"}]
 dependencies = ["numpy"]
@@ -27,6 +27,6 @@ DRACO_PREDICTIVE_EDGEBREAKER = "ON"
 DRACO_BACKWARDS_COMPATIBILITY = "ON"
 
 [tool.cibuildwheel]
-skip = ["pp*", "*-musllinux*"]
+skip = ["*-musllinux*"]
 test-command = "pytest {project}/tests"
 test-extras = ["test"]
