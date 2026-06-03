@@ -7,7 +7,34 @@ for glTF's `KHR_draco_mesh_compression` extension.
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-__version__ = "0.0.1"
+__version__ = "0.0.2"
+
+# Module-level encoding settings. Set these before calling trimesh .export()
+# to control Draco compression quality per-thread.
+import threading as _threading
+
+_settings = _threading.local()
+
+
+def set_encoder_options(
+    compression_level: int = 7,
+    quantization_position: int = 16,
+    quantization_normal: int = 14,
+    quantization_tex_coord: int = 14,
+) -> None:
+    """Set Draco encoder options for the current thread."""
+    _settings.compression_level = compression_level
+    _settings.quantization_position = quantization_position
+    _settings.quantization_normal = quantization_normal
+    _settings.quantization_tex_coord = quantization_tex_coord
+
+
+def clear_encoder_options() -> None:
+    """Reset encoder options to defaults."""
+    _settings.compression_level = None
+    _settings.quantization_position = None
+    _settings.quantization_normal = None
+    _settings.quantization_tex_coord = None
 
 if TYPE_CHECKING:
     from trimesh.exchange.gltf.extensions import (
@@ -115,14 +142,28 @@ def _draco_encode(ctx: "PrimitiveExportContext") -> Optional[Dict[str, Any]]:
     # Get optional texture coordinates
     texcoords = None
     if hasattr(mesh, "visual") and hasattr(mesh.visual, "uv") and mesh.visual.uv is not None:
-        texcoords = mesh.visual.uv.astype("float32")
+        uv = mesh.visual.uv.copy()[:, :2].astype("float32")
+        # Flip Y to match glTF convention (trimesh does this in its own export)
+        uv[:, 1] = 1.0 - uv[:, 1]
+        texcoords = uv
 
-    # Encode using dracox
+    # Encode using dracox with thread-local settings
+    encode_kwargs = {}
+    if (cl := getattr(_settings, "compression_level", None)) is not None:
+        encode_kwargs["compression_level"] = cl
+    if (qp := getattr(_settings, "quantization_position", None)) is not None:
+        encode_kwargs["quantization_position"] = qp
+    if (qn := getattr(_settings, "quantization_normal", None)) is not None:
+        encode_kwargs["quantization_normal"] = qn
+    if (qt := getattr(_settings, "quantization_tex_coord", None)) is not None:
+        encode_kwargs["quantization_tex_coord"] = qt
+
     result = encode_draco_buffer(
         vertices=vertices,
         faces=faces,
         normals=normals,
         texcoords=texcoords,
+        **encode_kwargs,
     )
 
     # Pad buffer to 4-byte alignment (GLTF requirement)
@@ -145,6 +186,8 @@ def _draco_encode(ctx: "PrimitiveExportContext") -> Optional[Dict[str, Any]]:
 
     # Replace buffers for these accessors with minimal 4-byte stubs
     # The accessor's bufferView field tells us which buffer to stub
+    # Per glTF spec: accessor count MUST remain correct (viewers read it to know
+    # how many elements the Draco buffer contains). Only the raw buffer is stubbed.
     accessor_list = list(accessors.values()) if hasattr(accessors, 'values') else accessors
     for acc_idx in accessor_indices:
         if acc_idx < len(accessor_list):
@@ -155,8 +198,6 @@ def _draco_encode(ctx: "PrimitiveExportContext") -> Optional[Dict[str, Any]]:
                 key = buffer_keys[bv_idx]
                 # Replace with 4-byte stub (minimum for alignment)
                 buffer_items[key] = b'\x00\x00\x00\x00'
-            # Update accessor count to 0 since data is in draco buffer
-            accessor["count"] = 0
 
     # Add compressed buffer to buffer_items
     # The bufferView index will be the position in the OrderedDict
@@ -249,4 +290,4 @@ def handle_draco_primitive(primitive, views, access):
     return True
 
 
-__all__ = ["_draco_decode", "_draco_encode", "handle_draco_primitive"]
+__all__ = ["_draco_decode", "_draco_encode", "handle_draco_primitive", "set_encoder_options", "clear_encoder_options"]

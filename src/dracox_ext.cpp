@@ -13,7 +13,6 @@
 #include "draco/core/decoder_buffer.h"
 #include "draco/core/encoder_buffer.h"
 #include "draco/mesh/mesh.h"
-#include "draco/mesh/triangle_soup_mesh_builder.h"
 #include "draco/point_cloud/point_cloud.h"
 
 namespace nb = nanobind;
@@ -172,117 +171,111 @@ nb::dict decode_draco_buffer(
     return result;
 }
 
-// Encode mesh data to Draco-compressed buffer using TriangleSoupMeshBuilder
+// Encode mesh data to Draco-compressed buffer preserving original vertex indices.
+// Uses draco::Mesh directly (NOT TriangleSoupMeshBuilder) to avoid vertex
+// deduplication that corrupts UV seams and normals at hard edges.
 nb::dict encode_draco_buffer(
     nb::ndarray<nb::numpy, float, nb::shape<-1, 3>> vertices,
     nb::ndarray<nb::numpy, uint32_t, nb::shape<-1, 3>> faces,
     std::optional<nb::ndarray<nb::numpy, float, nb::shape<-1, 3>>> normals,
     std::optional<nb::ndarray<nb::numpy, float, nb::shape<-1, 2>>> texcoords,
-    int compression_level = 7) {
+    int compression_level = 7,
+    int quantization_position = 16,
+    int quantization_normal = 14,
+    int quantization_tex_coord = 14) {
 
-    const size_t num_vertices = vertices.shape(0);
-    const size_t num_faces = faces.shape(0);
+    const int num_vertices = static_cast<int>(vertices.shape(0));
+    const int num_faces = static_cast<int>(faces.shape(0));
 
-    // Use TriangleSoupMeshBuilder for simpler mesh construction
-    draco::TriangleSoupMeshBuilder builder;
-    builder.Start(num_faces);
+    // Build mesh directly — preserves original vertex indices (no deduplication).
+    // This avoids TriangleSoupMeshBuilder which re-deduplicates vertices based on
+    // quantized values, corrupting UV seams.
+    auto mesh = std::unique_ptr<draco::Mesh>(new draco::Mesh());
+    mesh->set_num_points(num_vertices);
 
-    // Add position attribute
-    const int pos_att_id = builder.AddAttribute(
-        draco::GeometryAttribute::POSITION, 3, draco::DT_FLOAT32);
+    // Add position attribute (identity_mapping=false, we set mapping manually)
+    draco::GeometryAttribute pos_ga;
+    pos_ga.Init(draco::GeometryAttribute::POSITION, nullptr, 3, draco::DT_FLOAT32,
+                false, sizeof(float) * 3, 0);
+    const int pos_att_id = mesh->AddAttribute(pos_ga, false, num_vertices);
 
     // Add normal attribute if provided
     int norm_att_id = -1;
     if (normals.has_value()) {
-        norm_att_id = builder.AddAttribute(
-            draco::GeometryAttribute::NORMAL, 3, draco::DT_FLOAT32);
+        draco::GeometryAttribute norm_ga;
+        norm_ga.Init(draco::GeometryAttribute::NORMAL, nullptr, 3, draco::DT_FLOAT32,
+                     false, sizeof(float) * 3, 0);
+        norm_att_id = mesh->AddAttribute(norm_ga, false, num_vertices);
     }
 
     // Add texcoord attribute if provided
     int tex_att_id = -1;
     if (texcoords.has_value()) {
-        tex_att_id = builder.AddAttribute(
-            draco::GeometryAttribute::TEX_COORD, 2, draco::DT_FLOAT32);
+        draco::GeometryAttribute tex_ga;
+        tex_ga.Init(draco::GeometryAttribute::TEX_COORD, nullptr, 2, draco::DT_FLOAT32,
+                    false, sizeof(float) * 2, 0);
+        tex_att_id = mesh->AddAttribute(tex_ga, false, num_vertices);
     }
 
-    // Get data pointers
+    // Set attribute values and point mapping
     const float* vert_data = vertices.data();
-    const uint32_t* face_data = faces.data();
     const float* norm_data = normals.has_value() ? normals->data() : nullptr;
     const float* tex_data = texcoords.has_value() ? texcoords->data() : nullptr;
 
-    // Add faces with their vertex data
-    for (size_t fi = 0; fi < num_faces; ++fi) {
-        uint32_t i0 = face_data[fi * 3 + 0];
-        uint32_t i1 = face_data[fi * 3 + 1];
-        uint32_t i2 = face_data[fi * 3 + 2];
+    draco::PointAttribute* pos_att = mesh->attribute(pos_att_id);
+    draco::PointAttribute* norm_att = norm_att_id >= 0 ? mesh->attribute(norm_att_id) : nullptr;
+    draco::PointAttribute* tex_att = tex_att_id >= 0 ? mesh->attribute(tex_att_id) : nullptr;
 
-        draco::FaceIndex face_index(fi);
+    for (int i = 0; i < num_vertices; ++i) {
+        const draco::AttributeValueIndex avi(i);
+        const draco::PointIndex pi(i);
 
-        // Set position for each vertex of the face
-        builder.SetAttributeValuesForFace(
-            pos_att_id, face_index,
-            vert_data + i0 * 3,
-            vert_data + i1 * 3,
-            vert_data + i2 * 3);
+        pos_att->SetAttributeValue(avi, vert_data + i * 3);
+        pos_att->SetPointMapEntry(pi, avi);
 
-        // Set normals if provided
-        if (norm_data != nullptr) {
-            builder.SetAttributeValuesForFace(
-                norm_att_id, face_index,
-                norm_data + i0 * 3,
-                norm_data + i1 * 3,
-                norm_data + i2 * 3);
+        if (norm_att) {
+            norm_att->SetAttributeValue(avi, norm_data + i * 3);
+            norm_att->SetPointMapEntry(pi, avi);
         }
-
-        // Set texcoords if provided
-        if (tex_data != nullptr) {
-            builder.SetAttributeValuesForFace(
-                tex_att_id, face_index,
-                tex_data + i0 * 2,
-                tex_data + i1 * 2,
-                tex_data + i2 * 2);
+        if (tex_att) {
+            tex_att->SetAttributeValue(avi, tex_data + i * 2);
+            tex_att->SetPointMapEntry(pi, avi);
         }
     }
 
-    // Finalize mesh construction
-    std::unique_ptr<draco::Mesh> mesh = builder.Finalize();
-    if (mesh == nullptr) {
-        throw std::runtime_error("Failed to build Draco mesh");
+    // Add faces using original indices
+    const uint32_t* face_data = faces.data();
+    for (int fi = 0; fi < num_faces; ++fi) {
+        draco::Mesh::Face face;
+        face[0] = draco::PointIndex(face_data[fi * 3 + 0]);
+        face[1] = draco::PointIndex(face_data[fi * 3 + 1]);
+        face[2] = draco::PointIndex(face_data[fi * 3 + 2]);
+        mesh->AddFace(face);
     }
+
+#ifdef DRACO_ATTRIBUTE_DEDUPLICATION_SUPPORTED
+    // Deduplicate points that share identical values across ALL attributes.
+    // Unlike DeduplicateAttributeValues(), this preserves UV seams and
+    // normal splits — only truly redundant points are merged.
+    mesh->DeduplicatePointIds();
+#endif
 
     // Track attribute IDs for the extension
     nb::dict attributes;
-
-    // Get unique IDs from the finalized mesh
-    const draco::PointAttribute* pos_attr = mesh->GetNamedAttribute(
-        draco::GeometryAttribute::POSITION);
-    if (pos_attr != nullptr) {
-        attributes["POSITION"] = static_cast<int>(pos_attr->unique_id());
+    attributes["POSITION"] = static_cast<int>(pos_att->unique_id());
+    if (norm_att) {
+        attributes["NORMAL"] = static_cast<int>(norm_att->unique_id());
     }
-
-    if (normals.has_value()) {
-        const draco::PointAttribute* norm_attr = mesh->GetNamedAttribute(
-            draco::GeometryAttribute::NORMAL);
-        if (norm_attr != nullptr) {
-            attributes["NORMAL"] = static_cast<int>(norm_attr->unique_id());
-        }
-    }
-
-    if (texcoords.has_value()) {
-        const draco::PointAttribute* tex_attr = mesh->GetNamedAttribute(
-            draco::GeometryAttribute::TEX_COORD);
-        if (tex_attr != nullptr) {
-            attributes["TEXCOORD_0"] = static_cast<int>(tex_attr->unique_id());
-        }
+    if (tex_att) {
+        attributes["TEXCOORD_0"] = static_cast<int>(tex_att->unique_id());
     }
 
     // Create encoder and set options
     draco::Encoder encoder;
     encoder.SetSpeedOptions(10 - compression_level, 10 - compression_level);
-    encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, 14);
-    encoder.SetAttributeQuantization(draco::GeometryAttribute::NORMAL, 10);
-    encoder.SetAttributeQuantization(draco::GeometryAttribute::TEX_COORD, 12);
+    encoder.SetAttributeQuantization(draco::GeometryAttribute::POSITION, quantization_position);
+    encoder.SetAttributeQuantization(draco::GeometryAttribute::NORMAL, quantization_normal);
+    encoder.SetAttributeQuantization(draco::GeometryAttribute::TEX_COORD, quantization_tex_coord);
 
     // Encode the mesh
     draco::EncoderBuffer buffer;
@@ -295,8 +288,6 @@ nb::dict encode_draco_buffer(
 
     // Create result dictionary
     nb::dict result;
-
-    // Copy buffer data to Python bytes
     result["buffer"] = nb::bytes(buffer.data(), buffer.size());
     result["attributes"] = attributes;
 
@@ -318,13 +309,18 @@ NB_MODULE(dracox_ext, m) {
     m.def("encode_draco_buffer", &encode_draco_buffer,
           "vertices"_a, "faces"_a, "normals"_a = nb::none(),
           "texcoords"_a = nb::none(), "compression_level"_a = 7,
+          "quantization_position"_a = 16, "quantization_normal"_a = 14,
+          "quantization_tex_coord"_a = 14,
           "Encode mesh data to Draco-compressed buffer.\n\n"
           "Args:\n"
           "    vertices: (N, 3) float32 array of vertex positions\n"
           "    faces: (M, 3) uint32 array of face indices\n"
           "    normals: optional (N, 3) float32 array of vertex normals\n"
           "    texcoords: optional (N, 2) float32 array of texture coordinates\n"
-          "    compression_level: 0-10, higher = better compression (default 7)\n\n"
+          "    compression_level: 0-10, higher = better compression (default 7)\n"
+          "    quantization_position: quantization bits for positions (default 16)\n"
+          "    quantization_normal: quantization bits for normals (default 14)\n"
+          "    quantization_tex_coord: quantization bits for UVs (default 14)\n\n"
           "Returns:\n"
           "    dict with 'buffer' (compressed bytes) and 'attributes' (Draco IDs)");
 }
